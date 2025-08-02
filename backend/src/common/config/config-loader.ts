@@ -1,51 +1,25 @@
-import {
-  SecretsManagerClient,
-  GetSecretValueCommand,
-} from '@aws-sdk/client-secrets-manager';
+import { config } from 'dotenv';
 
-export default async () => {
-  const isProduction = ['production', 'uat'].includes(
-    process.env.NODE_ENV ?? '',
-  );
-  const envKeys = [
-    'DB_HOST',
-    'DB_PORT',
-    'DB_USERNAME',
-    'DB_PASSWORD',
-    'DB_DATABASE',
-    'PORT',
-  ];
+export default () => {
+  // Load environment variables from the appropriate .env file
+  config({ path: `.env.${process.env.NODE_ENV || 'development'}` });
 
-  const config = envKeys.reduce(
-    (acc, key) => {
-      acc[key] = process.env[key];
-      return acc;
-    },
-    {} as { [key: string]: string | undefined },
-  );
+  return {
+    // Database Configuration
+    DB_HOST: process.env.DB_HOST || 'localhost',
+    DB_PORT: parseInt(process.env.DB_PORT || '5432', 10),
+    DB_USERNAME: process.env.DB_USERNAME || 'postgres',
+    DB_PASSWORD: process.env.DB_PASSWORD,
+    DB_DATABASE: process.env.DB_DATABASE || 'scalable_likes_system',
 
-  if (isProduction) {
-    const secretName = process.env.SECRET_NAME;
-    if (!secretName) {
-      throw new Error(
-        'SECRET_NAME environment variable is not set for production environment.',
-      );
-    }
+    // Application Configuration
+    PORT: parseInt(process.env.PORT || '3001', 10),
 
-    const client = new SecretsManagerClient();
-    try {
-      const command = new GetSecretValueCommand({ SecretId: secretName });
-      const data = await client.send(command);
+    // Redis Configuration
+    REDIS_HOST: process.env.REDIS_HOST || 'redis',
+    REDIS_PORT: parseInt(process.env.REDIS_PORT || '6379', 10),
 
-      if (data.SecretString) {
-        const secrets = JSON.parse(data.SecretString);
-        Object.assign(config, secrets);
-      }
-    } catch (error) {
-      console.error('Failed to fetch secrets from AWS Secrets Manager:', error);
-      throw error;
-    }
-  }
-
-  return config;
+    // Kafka Configuration
+    KAFKA_BROKER: process.env.KAFKA_BROKER || 'kafka:9092',
+  };
 };

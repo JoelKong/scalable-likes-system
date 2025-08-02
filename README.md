@@ -1,4 +1,4 @@
-# Scalable Like System – Social Media Event-Driven Architecture
+# Scalable Likes System – Social Media Event-Driven Architecture
 
 This project i did up replicates how social media platforms handles **millions of likes per second** with **eventual consistency**, **Kafka-based decoupling**, **Redis caching**, **idempotent writes**, and **resilient retries**.
 
@@ -139,21 +139,43 @@ for each post_id in DB:
 
 ---
 
-## API Contract
+## API Documentation
 
-### `POST /like`
+This project includes **Swagger/OpenAPI** documentation for all API endpoints.
 
-```json
-{
-  "post_id": 123,
-  "user_id": 456
-}
+### Access Swagger UI
+
+Once the backend is running, visit:
+
+```
+http://localhost:3001/api/docs
 ```
 
-### Response:
+### Available Endpoints
 
-- `200 OK` → Like counted (in Redis), event queued
-- `202 Accepted` → DB write pending (eventual consistency)
+| Method | Endpoint          | Description                             |
+| ------ | ----------------- | --------------------------------------- |
+| POST   | `/like`           | Toggle like/unlike for a post via kafka |
+| GET    | `/like/count/:id` | Get real-time like count from redis     |
+
+### Example API Usage
+
+#### Toggle Like
+
+```bash
+curl -X POST http://localhost:3001/like \
+  -H "Content-Type: application/json" \
+  -d '{
+    "post_id": 123,
+    "user_id": 456
+  }'
+```
+
+#### Get Like Count
+
+```bash
+curl http://localhost:3001/like/count/123
+```
 
 ---
 

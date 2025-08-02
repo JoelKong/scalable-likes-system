@@ -1,6 +1,8 @@
 import 'reflect-metadata';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { config } from 'dotenv';
+import { Like } from '../entities/like.entity';
+import { Post } from '../entities/post.entity';
 
 config({ path: `.env.${process.env.NODE_ENV || 'development'}` });
 
@@ -11,7 +13,7 @@ export const dataSourceOptions: DataSourceOptions = {
   username: process.env.DB_USERNAME,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_DATABASE,
-  entities: [Likes, Posts],
+  entities: [Like, Post],
   migrations: [__dirname + '/../../db/migrations/*{.ts,.js}'],
   synchronize: false,
 };

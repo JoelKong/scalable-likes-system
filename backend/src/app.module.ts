@@ -1,13 +1,11 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { ResumeModule } from './likes/like.module';
-import { IngestionModule } from './ingestion/ingestion.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { LikeModule } from './likes/like.module';
 import { CorrelationIdMiddleware } from './common/middlewares/correlation-id';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Resume } from './common/entities/resume.entity';
-import { S3Service } from './s3/s3.service';
-import { S3Module } from './s3/s3.module';
-import { LlmModule } from './llm/llm.module';
+import { Like } from './common/entities/like.entity';
+import { Post } from './common/entities/post.entity';
 import configuration from './common/config/config-loader';
 
 @Module({
@@ -16,6 +14,7 @@ import configuration from './common/config/config-loader';
       isGlobal: true,
       load: [configuration],
     }),
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -26,10 +25,11 @@ import configuration from './common/config/config-loader';
         username: configService.get<string>('DB_USERNAME'),
         password: configService.get<string>('DB_PASSWORD'),
         database: configService.get<string>('DB_DATABASE'),
-        entities: [Resume],
+        entities: [Like, Post],
         synchronize: false,
       }),
     }),
+    LikeModule,
   ],
 })
 export class AppModule implements NestModule {

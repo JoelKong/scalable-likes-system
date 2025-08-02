@@ -1,99 +1,154 @@
-// import {
-//   Injectable,
-//   InternalServerErrorException,
-//   Logger,
-//   NotFoundException,
-//   ServiceUnavailableException,
-// } from '@nestjs/common';
-// import { ResumeRepository } from './like.repository';
-// import { UploadResumeRequestDto } from './dtos/request/upload-resume.request.dto';
-// import { UploadResumeResponseDto } from './dtos/response/upload-resume.response.dto';
-// import { S3Service } from '../s3/s3.service';
-// import { v4 as uuidv4 } from 'uuid';
-// import { FileStatus } from '../../src/common/enums/file-status';
-// import { GetResumeAnalysisResponseDto } from './dtos/response/get-resume-analysis.response.dto';
+import { Injectable, Logger } from '@nestjs/common';
+import { LikeRepository } from './like.repository';
+import { LikeRequestDto } from './dtos/request/like.request.dto';
+import { LikeResponseDto } from './dtos/response/like.response.dto';
+import { LikeCountResponseDto } from './dtos/response/like-count.response.dto';
+import { v4 as uuidv4 } from 'uuid';
+import { LikeEventDto } from 'src/kafka/events/kafka.event.dto';
+import { KafkaService } from 'src/kafka/kafka.service';
+import { RedisService } from 'src/redis/redis.service';
 
-// @Injectable()
-// export class ResumeService {
-//   private readonly logger = new Logger(ResumeService.name);
+@Injectable()
+export class LikeService {
+  private readonly logger = new Logger(LikeService.name);
 
-//   constructor(
-//     private readonly resumeRepository: ResumeRepository,
-//     private readonly s3Service: S3Service,
-//   ) {}
+  constructor(
+    private readonly likeRepository: LikeRepository,
+    private readonly redisService: RedisService,
+    private readonly kafkaService: KafkaService,
+  ) {}
 
-//   async uploadResume(
-//     file: Express.Multer.File,
-//     uploadResumeDto: UploadResumeRequestDto,
-//   ): Promise<UploadResumeResponseDto> {
-//     this.logger.log(`Processing upload for file: ${file.originalname}`);
-//     const fileId = uuidv4();
-//     const fileExtension = file.originalname.split('.').pop();
-//     const s3Key = `${fileId}.${fileExtension}`;
+  async toggleLike(likeRequestDto: LikeRequestDto): Promise<LikeResponseDto> {
+    const { post_id, user_id } = likeRequestDto;
 
-//     try {
-//       await this.s3Service.uploadFile(file, s3Key);
-//     } catch (error) {
-//       this.logger.error(`S3 upload failed for ${s3Key}`, error.stack);
-//       throw new ServiceUnavailableException(
-//         'File upload service is currently unavailable. Please try again later.',
-//       );
-//     }
+    this.logger.log(
+      `Processing like toggle for post ${post_id}, user ${user_id}`,
+    );
 
-//     try {
-//       const resume = await this.resumeRepository.createResume(
-//         s3Key,
-//         uploadResumeDto.jobUrl,
-//       );
+    try {
+      // Check if user already liked this post (from DB for accuracy)
+      const existingLike = await this.likeRepository.findLikeByPostAndUser(
+        post_id,
+        user_id,
+      );
 
-//       this.logger.log(
-//         `Successfully created resume record with id: ${resume.id}`,
-//       );
+      let newCount: number;
+      let message: string;
+      let action: 'LIKE' | 'UNLIKE';
 
-//       return {
-//         id: resume.id,
-//         fileName: resume.fileName,
-//         status: resume.status,
-//         message: 'Resume uploaded successfully and is pending analysis.',
-//       };
-//     } catch (error) {
-//       this.logger.error(
-//         `Failed to create resume record in database for ${s3Key}`,
-//         error.stack,
-//       );
-//       throw new InternalServerErrorException(
-//         'Failed to save resume information.',
-//       );
-//     }
-//   }
+      if (existingLike) {
+        // Unlike - decrement Redis count immediately
+        newCount = await this.redisService.decrementLikeCount(post_id);
+        action = 'UNLIKE';
+        message = 'Post unliked successfully';
 
-//   async getResumeAnalysis(id: string): Promise<GetResumeAnalysisResponseDto> {
-//     this.logger.log(`Fetching analysis for resume id: ${id}`);
-//     const resume = await this.resumeRepository.findResumeById(id);
+        this.logger.log(
+          `User ${user_id} unliked post ${post_id}, Redis count: ${newCount}`,
+        );
+      } else {
+        // Like - increment Redis count immediately
+        newCount = await this.redisService.incrementLikeCount(post_id);
+        action = 'LIKE';
+        message = 'Post liked successfully';
 
-//     if (!resume) {
-//       throw new NotFoundException(`Resume with ID "${id}" not found.`);
-//     }
+        this.logger.log(
+          `User ${user_id} liked post ${post_id}, Redis count: ${newCount}`,
+        );
+      }
 
-//     let message = '';
-//     switch (resume.status) {
-//       case FileStatus.PROCESSED:
-//         message = 'Analysis complete.';
-//         break;
-//       case FileStatus.PENDING:
-//       case FileStatus.NEW:
-//         message = 'Analysis is pending. Please check back later.';
-//         break;
-//       case FileStatus.INVALID:
-//         message = 'Analysis failed. There was an issue processing the resume.';
-//         break;
-//     }
+      // Create event for Kafka
+      const eventId = uuidv4();
+      const likeEvent: LikeEventDto = {
+        event_id: eventId,
+        post_id,
+        user_id,
+        action,
+        timestamp: new Date(),
+      };
 
-//     return {
-//       id: resume.id,
-//       status: resume.status,
-//       insights: resume.insights,
-//       message,
-//     };
-//   }
-// }
+      // Produce event to Kafka for asynchronous database processing
+      await this.kafkaService.produceLikeEvent(likeEvent);
+
+      return {
+        success: true,
+        message,
+        likeCount: newCount, // Return the Redis count for real-time response
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to toggle like for post ${post_id}, user ${user_id}`,
+        error.stack,
+      );
+      return {
+        success: false,
+        message: 'Failed to process like',
+      };
+    }
+  }
+
+  async getLikeCount(postId: number): Promise<LikeCountResponseDto> {
+    this.logger.log(`Fetching like count for post ${postId} from Redis`);
+
+    try {
+      // Get count from Redis first (fast access layer)
+      let count = await this.redisService.getLikeCount(postId);
+
+      // If Redis doesn't have the count, warm it up from DB
+      if (count === 0) {
+        this.logger.log(
+          `Redis cache miss for post ${postId}, warming up from DB`,
+        );
+        await this.likeRepository.ensurePostExists(postId);
+        const dbCount = await this.likeRepository.getLikeCount(postId);
+        await this.redisService.setLikeCount(postId, dbCount);
+        count = dbCount;
+      }
+
+      return {
+        count,
+        post_id: postId,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to fetch like count for post ${postId}`,
+        error.stack,
+      );
+
+      // Fallback to DB if Redis fails
+      try {
+        await this.likeRepository.ensurePostExists(postId);
+        const dbCount = await this.likeRepository.getLikeCount(postId);
+        return {
+          count: dbCount,
+          post_id: postId,
+        };
+      } catch (dbError) {
+        this.logger.error(
+          `DB fallback also failed for post ${postId}`,
+          dbError.stack,
+        );
+        return {
+          count: 0,
+          post_id: postId,
+        };
+      }
+    }
+  }
+
+  // Background sync method (this would be a separate service/cron job in production)
+  async syncRedisFromDatabase(postId: number): Promise<void> {
+    this.logger.log(`Syncing Redis count from DB for post ${postId}`);
+    try {
+      const dbCount = await this.likeRepository.getLikeCount(postId);
+      await this.redisService.setLikeCount(postId, dbCount);
+      this.logger.log(
+        `Synced post ${postId}: Redis count updated to ${dbCount}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to sync post ${postId} from DB to Redis`,
+        error.stack,
+      );
+    }
+  }
+}

@@ -1,36 +1,45 @@
-// import { FileStatus } from '../../../../src/common/enums/file-status';
-// import { Transition } from '../Istatemachine';
-// import { FileStatusEvent } from './like.state-machine.events';
-// import { Resume } from '../../../../src/common/entities/resume.entity';
-// import { FileStateHandlers } from './like.state-machine.handlers';
+import { Transition } from '../Istatemachine';
+import { LikeStatusEvent } from './like.state-machine.events';
+import { Like } from '../../entities/like.entity';
+import { LikeStateHandlers } from './like.state-machine.handlers';
+import { LikeStatus } from 'src/common/enums/like-status.enum';
 
-// export const fileTransitions: Transition<
-//   FileStatus,
-//   FileStatusEvent,
-//   Resume
-// >[] = [
-//   {
-//     fromState: FileStatus.NEW,
-//     toState: FileStatus.PENDING,
-//     stateMachineEvent: FileStatusEvent.SET_PENDING,
-//     handlers: [FileStateHandlers.setStatusHandler],
-//   },
-//   {
-//     fromState: FileStatus.PENDING,
-//     toState: FileStatus.PROCESSED,
-//     stateMachineEvent: FileStatusEvent.SET_PROCESSED,
-//     handlers: [FileStateHandlers.setStatusHandler],
-//   },
-//   {
-//     fromState: FileStatus.PENDING,
-//     toState: FileStatus.INVALID,
-//     stateMachineEvent: FileStatusEvent.SET_INVALID,
-//     handlers: [FileStateHandlers.setStatusHandler],
-//   },
-//   {
-//     fromState: FileStatus.NEW,
-//     toState: FileStatus.INVALID,
-//     stateMachineEvent: FileStatusEvent.SET_INVALID,
-//     handlers: [FileStateHandlers.setStatusHandler],
-//   },
-// ];
+export const likeTransitions: Transition<LikeStatus, LikeStatusEvent, Like>[] =
+  [
+    {
+      fromState: LikeStatus.PENDING,
+      toState: LikeStatus.RETRYING,
+      stateMachineEvent: LikeStatusEvent.SET_RETRYING,
+      handlers: [LikeStateHandlers.setStatusHandler],
+    },
+    {
+      fromState: LikeStatus.PENDING,
+      toState: LikeStatus.SUCCESS,
+      stateMachineEvent: LikeStatusEvent.SET_SUCCESS,
+      handlers: [LikeStateHandlers.setStatusHandler],
+    },
+    {
+      fromState: LikeStatus.PENDING,
+      toState: LikeStatus.FAILED,
+      stateMachineEvent: LikeStatusEvent.SET_FAILED,
+      handlers: [LikeStateHandlers.setStatusHandler],
+    },
+    {
+      fromState: LikeStatus.RETRYING,
+      toState: LikeStatus.SUCCESS,
+      stateMachineEvent: LikeStatusEvent.SET_SUCCESS,
+      handlers: [LikeStateHandlers.setStatusHandler],
+    },
+    {
+      fromState: LikeStatus.RETRYING,
+      toState: LikeStatus.FAILED,
+      stateMachineEvent: LikeStatusEvent.SET_FAILED,
+      handlers: [LikeStateHandlers.setStatusHandler],
+    },
+    {
+      fromState: LikeStatus.RETRYING,
+      toState: LikeStatus.RETRYING,
+      stateMachineEvent: LikeStatusEvent.SET_RETRYING,
+      handlers: [LikeStateHandlers.setStatusHandler],
+    },
+  ];
