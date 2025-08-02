@@ -167,7 +167,7 @@ for each post_id in DB:
 
 ## Summary
 
-| Feature               | Supported ✅                |
+| Feature               | Supported                   |
 | --------------------- | --------------------------- |
 | Real-time likes       | via Redis                   |
 | Durable storage       | via PostgreSQL              |
