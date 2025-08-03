@@ -7,7 +7,7 @@ services:
     container_name: scalable-likes-postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: rjge7nft
+      POSTGRES_PASSWORD: 123456
       POSTGRES_DB: scalable_likes_system
     ports:
       - "5432:5432"
@@ -102,7 +102,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USERNAME: postgres
-      DB_PASSWORD: rjge7nft
+      DB_PASSWORD: 123455
       DB_DATABASE: scalable_likes_system
       # Redis Configuration
       REDIS_HOST: redis
