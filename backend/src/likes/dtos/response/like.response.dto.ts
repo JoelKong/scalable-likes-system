@@ -14,9 +14,9 @@ export class LikeResponseDto {
   message: string;
 
   @ApiProperty({
-    description: 'Current like count from Redis (optional)',
-    example: 42,
+    description: 'Current like status for the user',
+    example: true,
     required: false,
   })
-  likeCount?: number;
+  isLiked?: boolean;
 }

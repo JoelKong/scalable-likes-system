@@ -4,7 +4,7 @@ import { LikeRequestDto } from './dtos/request/like.request.dto';
 import { LikeResponseDto } from './dtos/response/like.response.dto';
 import { LikeCountResponseDto } from './dtos/response/like-count.response.dto';
 import { v4 as uuidv4 } from 'uuid';
-import { LikeEventDto } from 'src/kafka/events/kafka.event.dto';
+import { PostCountEventDto } from 'src/kafka/events/kafka.event.dto';
 import { KafkaService } from 'src/kafka/kafka.service';
 import { RedisService } from 'src/redis/redis.service';
 
@@ -26,53 +26,56 @@ export class LikeService {
     );
 
     try {
-      // Check if user already liked this post (from DB for accuracy)
+      // Ensure post exists
+      await this.likeRepository.ensurePostExists(post_id);
+
+      // Check if user already liked this post
       const existingLike = await this.likeRepository.findLikeByPostAndUser(
         post_id,
         user_id,
       );
 
-      let newCount: number;
       let message: string;
-      let action: 'LIKE' | 'UNLIKE';
+      let delta: number;
+      let isLiked: boolean;
 
       if (existingLike) {
-        // Unlike - decrement Redis count immediately
-        newCount = await this.redisService.decrementLikeCount(post_id);
-        action = 'UNLIKE';
+        // Unlike - remove from likes table
+        await this.likeRepository.deleteLike(post_id, user_id);
+        delta = -1;
         message = 'Post unliked successfully';
+        isLiked = false;
 
-        this.logger.log(
-          `User ${user_id} unliked post ${post_id}, Redis count: ${newCount}`,
-        );
+        this.logger.log(`User ${user_id} unliked post ${post_id}`);
       } else {
-        // Like - increment Redis count immediately
-        newCount = await this.redisService.incrementLikeCount(post_id);
-        action = 'LIKE';
+        // Like - add to likes table
+        await this.likeRepository.createLike(post_id, user_id);
+        delta = 1;
         message = 'Post liked successfully';
+        isLiked = true;
 
-        this.logger.log(
-          `User ${user_id} liked post ${post_id}, Redis count: ${newCount}`,
-        );
+        this.logger.log(`User ${user_id} liked post ${post_id}`);
       }
 
-      // Create event for Kafka
+      // Invalidate Redis cache for this post
+      await this.redisService.deleteLikeCount(post_id);
+
+      // Create event for Kafka to update post count
       const eventId = uuidv4();
-      const likeEvent: LikeEventDto = {
+      const postCountEvent: PostCountEventDto = {
         event_id: eventId,
         post_id,
-        user_id,
-        action,
+        delta,
         timestamp: new Date(),
       };
 
-      // Produce event to Kafka for asynchronous database processing
-      await this.kafkaService.produceLikeEvent(likeEvent);
+      // Produce event to Kafka for asynchronous post count update
+      await this.kafkaService.producePostCountEvent(postCountEvent);
 
       return {
         success: true,
         message,
-        likeCount: newCount, // Return the Redis count for real-time response
+        isLiked,
       };
     } catch (error) {
       this.logger.error(
@@ -87,21 +90,27 @@ export class LikeService {
   }
 
   async getLikeCount(postId: number): Promise<LikeCountResponseDto> {
-    this.logger.log(`Fetching like count for post ${postId} from Redis`);
+    this.logger.log(`Fetching like count for post ${postId}`);
 
     try {
-      // Get count from Redis first (fast access layer)
+      // Try to get count from Redis first
       let count = await this.redisService.getLikeCount(postId);
 
-      // If Redis doesn't have the count, warm it up from DB
-      if (count === 0) {
-        this.logger.log(
-          `Redis cache miss for post ${postId}, warming up from DB`,
-        );
+      if (count === null) {
+        // Cache miss - get from database
+        this.logger.log(`Redis cache miss for post ${postId}, querying DB`);
+
         await this.likeRepository.ensurePostExists(postId);
-        const dbCount = await this.likeRepository.getLikeCount(postId);
-        await this.redisService.setLikeCount(postId, dbCount);
-        count = dbCount;
+        count = await this.likeRepository.getLikeCount(postId);
+
+        // Update Redis cache with TTL
+        await this.redisService.setLikeCountWithTTL(postId, count);
+
+        this.logger.log(
+          `Updated Redis cache for post ${postId} with count ${count}`,
+        );
+      } else {
+        this.logger.log(`Redis cache hit for post ${postId}, count: ${count}`);
       }
 
       return {
@@ -135,20 +144,19 @@ export class LikeService {
     }
   }
 
-  // Background sync method (this would be a separate service/cron job in production)
-  async syncRedisFromDatabase(postId: number): Promise<void> {
-    this.logger.log(`Syncing Redis count from DB for post ${postId}`);
+  async getUserLikeStatus(postId: number, userId: number): Promise<boolean> {
     try {
-      const dbCount = await this.likeRepository.getLikeCount(postId);
-      await this.redisService.setLikeCount(postId, dbCount);
-      this.logger.log(
-        `Synced post ${postId}: Redis count updated to ${dbCount}`,
+      const like = await this.likeRepository.findLikeByPostAndUser(
+        postId,
+        userId,
       );
+      return !!like;
     } catch (error) {
       this.logger.error(
-        `Failed to sync post ${postId} from DB to Redis`,
+        `Failed to get user like status for post ${postId}, user ${userId}`,
         error.stack,
       );
+      return false;
     }
   }
 }

@@ -1,7 +1,6 @@
-export interface LikeEventDto {
+export interface PostCountEventDto {
   event_id: string;
   post_id: number;
-  user_id: number;
-  action: 'LIKE' | 'UNLIKE';
+  delta: number; // +1 for like, -1 for unlike
   timestamp: Date;
 }

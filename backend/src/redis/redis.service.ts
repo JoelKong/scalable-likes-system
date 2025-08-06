@@ -6,6 +6,7 @@ import Redis from 'ioredis';
 export class RedisService implements OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private readonly client: Redis;
+  private readonly LIKE_COUNT_TTL = 300; // 5 minutes
 
   constructor(private configService: ConfigService) {
     this.client = new Redis({
@@ -24,30 +25,24 @@ export class RedisService implements OnModuleDestroy {
     });
   }
 
-  async incrementLikeCount(postId: number): Promise<number> {
-    const key = `post:${postId}:like_count`;
-    return await this.client.incr(key);
-  }
-
-  async decrementLikeCount(postId: number): Promise<number> {
-    const key = `post:${postId}:like_count`;
-    const newCount = await this.client.decr(key);
-    if (newCount < 0) {
-      await this.client.set(key, 0);
-      return 0;
-    }
-    return newCount;
-  }
-
-  async getLikeCount(postId: number): Promise<number> {
+  async getLikeCount(postId: number): Promise<number | null> {
     const key = `post:${postId}:like_count`;
     const count = await this.client.get(key);
-    return count ? parseInt(count, 10) : 0;
+    return count ? parseInt(count, 10) : null;
   }
 
-  async setLikeCount(postId: number, count: number): Promise<void> {
+  async setLikeCountWithTTL(postId: number, count: number): Promise<void> {
     const key = `post:${postId}:like_count`;
-    await this.client.set(key, count);
+    await this.client.setex(key, this.LIKE_COUNT_TTL, count);
+    this.logger.debug(
+      `Set Redis cache for post ${postId}: ${count} (TTL: ${this.LIKE_COUNT_TTL}s)`,
+    );
+  }
+
+  async deleteLikeCount(postId: number): Promise<void> {
+    const key = `post:${postId}:like_count`;
+    await this.client.del(key);
+    this.logger.debug(`Deleted Redis cache for post ${postId}`);
   }
 
   onModuleDestroy() {

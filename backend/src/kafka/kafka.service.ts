@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Kafka, Producer, Consumer, EachMessagePayload } from 'kafkajs';
-import { LikeEventDto } from './events/kafka.event.dto';
+import { PostCountEventDto } from './events/kafka.event.dto';
 
 @Injectable()
 export class KafkaService implements OnModuleInit, OnModuleDestroy {
@@ -19,7 +19,6 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
     this.kafka = new Kafka({
       clientId: 'scalable-likes-service',
       brokers: [this.configService.get<string>('KAFKA_BROKER', 'kafka:9092')],
-      // Add connection timeout settings
       connectionTimeout: 30000,
       requestTimeout: 25000,
       retry: {
@@ -35,8 +34,7 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.consumer = this.kafka.consumer({
-      groupId: 'like-events-group',
-      // Add consumer-specific configurations to prevent rebalancing
+      groupId: 'post-count-events-group',
       sessionTimeout: 30000,
       rebalanceTimeout: 60000,
       heartbeatInterval: 3000,
@@ -72,43 +70,43 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async produceLikeEvent(likeEvent: LikeEventDto): Promise<void> {
+  async producePostCountEvent(
+    postCountEvent: PostCountEventDto,
+  ): Promise<void> {
     try {
       await this.producer.send({
-        topic: 'like-events',
+        topic: 'post-count-events',
         messages: [
           {
-            key: likeEvent.event_id,
-            value: JSON.stringify(likeEvent),
+            key: postCountEvent.event_id,
+            value: JSON.stringify(postCountEvent),
             headers: {
-              event_id: likeEvent.event_id,
-              post_id: likeEvent.post_id.toString(),
-              user_id: likeEvent.user_id.toString(),
+              event_id: postCountEvent.event_id,
+              post_id: postCountEvent.post_id.toString(),
             },
           },
         ],
       });
 
-      this.logger.log(`Produced like event: ${likeEvent.event_id}`);
+      this.logger.log(`Produced post count event: ${postCountEvent.event_id}`);
     } catch (error) {
       this.logger.error(
-        `Failed to produce like event: ${likeEvent.event_id}`,
+        `Failed to produce post count event: ${postCountEvent.event_id}`,
         error.stack,
       );
       throw error;
     }
   }
 
-  async consumeLikeEvents(
+  async consumePostCountEvents(
     messageHandler: (payload: EachMessagePayload) => Promise<void>,
   ): Promise<void> {
     await this.consumer.subscribe({
-      topic: 'like-events',
+      topic: 'post-count-events',
       fromBeginning: false,
     });
 
     await this.consumer.run({
-      // Add more robust message processing configuration
       partitionsConsumedConcurrently: 1,
       eachMessage: async (payload) => {
         const { topic, partition, message } = payload;
@@ -123,12 +121,11 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
             `Error processing Kafka message at offset ${message.offset}`,
             error.stack,
           );
-          // Don't rethrow here to prevent consumer from crashing
         }
       },
     });
 
-    this.logger.log('Kafka consumer started for like-events topic');
+    this.logger.log('Kafka consumer started for post-count-events topic');
   }
 
   async sendToDeadLetterQueue(
@@ -137,7 +134,7 @@ export class KafkaService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     try {
       await this.producer.send({
-        topic: 'like-events-dlq',
+        topic: 'post-count-events-dlq',
         messages: [
           {
             key: originalMessage.key,

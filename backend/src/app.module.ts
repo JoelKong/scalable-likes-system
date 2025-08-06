@@ -1,11 +1,11 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { ScheduleModule } from '@nestjs/schedule';
 import { LikeModule } from './likes/like.module';
 import { CorrelationIdMiddleware } from './common/middlewares/correlation-id';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Like } from './common/entities/like.entity';
 import { Post } from './common/entities/post.entity';
+import { PostCountEvent } from './common/entities/post-count-event.entity';
 import configuration from './common/config/config-loader';
 
 @Module({
@@ -14,7 +14,6 @@ import configuration from './common/config/config-loader';
       isGlobal: true,
       load: [configuration],
     }),
-    ScheduleModule.forRoot(),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -25,7 +24,7 @@ import configuration from './common/config/config-loader';
         username: configService.get<string>('DB_USERNAME'),
         password: configService.get<string>('DB_PASSWORD'),
         database: configService.get<string>('DB_DATABASE'),
-        entities: [Like, Post],
+        entities: [Like, Post, PostCountEvent],
         synchronize: false,
       }),
     }),

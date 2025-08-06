@@ -1,4 +1,4 @@
-export enum LikeStatus {
+export enum EventStatus {
   PENDING = 'PENDING',
   RETRYING = 'RETRYING',
   SUCCESS = 'SUCCESS',

@@ -1,16 +1,16 @@
 import { StateMachineEventHandler } from '../Istatemachine';
-import { LikeStatusEvent } from './like.state-machine.events';
-import { Like } from '../../entities/like.entity';
-import { LikeStatus } from 'src/common/enums/like-status.enum';
+import { PostCountEvent } from '../../entities/post-count-event.entity';
+import { EventStatus } from 'src/common/enums/like-status.enum';
+import { EventStatusEvent } from './like.state-machine.events';
 
-export type LikeStateHandler = StateMachineEventHandler<
-  LikeStatus,
-  LikeStatusEvent,
-  Like
+export type EventStateHandler = StateMachineEventHandler<
+  EventStatus,
+  EventStatusEvent,
+  PostCountEvent
 >;
 
-export class LikeStateHandlers {
-  public static setStatusHandler: LikeStateHandler = (
+export class EventStateHandlers {
+  public static setStatusHandler: EventStateHandler = (
     fromState,
     toState,
     event,
@@ -20,7 +20,7 @@ export class LikeStateHandlers {
       entity.status = toState;
 
       // Increment retry count when moving to retrying state
-      if (toState === LikeStatus.RETRYING) {
+      if (toState === EventStatus.RETRYING) {
         entity.retry_count = (entity.retry_count || 0) + 1;
       }
     } else {

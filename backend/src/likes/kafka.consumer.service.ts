@@ -1,92 +1,136 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { LikeRepository } from './like.repository';
-import { StateMachine } from '../common/statemachine/statemachine';
-import { LikeStatusEvent } from '../common/statemachine/likes/like.state-machine.events';
-import { Like } from '../common/entities/like.entity';
-import { likeTransitions } from '../common/statemachine/likes/like.state-machine';
 import { EachMessagePayload } from 'kafkajs';
-import { LikeStatus } from 'src/common/enums/like-status.enum';
 import { ExponentialBackoff } from 'src/common/utils/exponential-backoff.util';
 import type { RetryOptions } from 'src/common/utils/exponential-backoff.util';
-import { LikeEventDto } from 'src/kafka/events/kafka.event.dto';
+import { PostCountEventDto } from 'src/kafka/events/kafka.event.dto';
 import { KafkaService } from 'src/kafka/kafka.service';
+import { StateMachine } from 'src/common/statemachine/statemachine';
+
+import { PostCountEvent } from 'src/common/entities/post-count-event.entity';
+import { EventStatus } from 'src/common/enums/like-status.enum';
+import { eventTransitions } from 'src/common/statemachine/likes/like.state-machine';
+import { EventStatusEvent } from 'src/common/statemachine/likes/like.state-machine.events';
 
 @Injectable()
 export class KafkaConsumerService implements OnModuleInit {
   private readonly logger = new Logger(KafkaConsumerService.name);
-  private readonly stateMachine: StateMachine<
-    LikeStatus,
-    LikeStatusEvent,
-    Like
-  >;
   private readonly retryOptions: RetryOptions = {
     maxRetries: 5,
     baseDelay: 1000,
     maxDelay: 30000,
   };
+  private readonly stateMachine: StateMachine<
+    EventStatus,
+    EventStatusEvent,
+    PostCountEvent
+  >;
 
   constructor(
     private readonly kafkaService: KafkaService,
     private readonly likeRepository: LikeRepository,
   ) {
-    this.stateMachine = new StateMachine<LikeStatus, LikeStatusEvent, Like>();
-    this.stateMachine.register(likeTransitions);
+    this.stateMachine = new StateMachine();
+    this.stateMachine.register(eventTransitions);
   }
 
   async onModuleInit() {
-    // Start consuming like events
-    await this.kafkaService.consumeLikeEvents(this.handleLikeEvent.bind(this));
+    await this.kafkaService.consumePostCountEvents(
+      this.handlePostCountEvent.bind(this),
+    );
   }
 
-  private async handleLikeEvent(payload: EachMessagePayload): Promise<void> {
+  private async handlePostCountEvent(
+    payload: EachMessagePayload,
+  ): Promise<void> {
     const { message } = payload;
 
     try {
-      const likeEvent: LikeEventDto = JSON.parse(
+      const postCountEvent: PostCountEventDto = JSON.parse(
         message.value?.toString() || '{}',
       );
-      this.logger.log(`Processing like event: ${likeEvent.event_id}`);
+      this.logger.log(
+        `Processing post count event: ${postCountEvent.event_id}`,
+      );
 
-      await this.processLikeEventWithRetry(likeEvent);
+      await this.processPostCountEventWithRetry(postCountEvent);
     } catch (error) {
-      this.logger.error('Failed to parse like event message', error.stack);
+      this.logger.error(
+        'Failed to parse post count event message',
+        error.stack,
+      );
       await this.kafkaService.sendToDeadLetterQueue(message, error as Error);
     }
   }
 
-  private async processLikeEventWithRetry(
-    likeEvent: LikeEventDto,
+  private async processPostCountEventWithRetry(
+    postCountEvent: PostCountEventDto,
   ): Promise<void> {
+    // Create or get existing event record
+    let eventRecord = await this.likeRepository.findPostCountEventById(
+      postCountEvent.event_id,
+    );
+
+    if (!eventRecord) {
+      eventRecord = await this.likeRepository.recordPostCountEvent(
+        postCountEvent.event_id,
+        postCountEvent.post_id,
+        postCountEvent.delta,
+        EventStatus.PENDING,
+      );
+    }
+
     try {
       await ExponentialBackoff.execute(
-        () => this.processLikeEvent(likeEvent),
+        () => this.processPostCountEvent(postCountEvent, eventRecord!),
         this.retryOptions,
-        `LikeEvent-${likeEvent.event_id}`,
+        `PostCountEvent-${postCountEvent.event_id}`,
+      );
+
+      // Mark as successful
+      const newStatus = this.stateMachine.trigger(
+        eventRecord.status as EventStatus,
+        EventStatusEvent.SET_SUCCESS,
+        eventRecord,
+      );
+      await this.likeRepository.updatePostCountEventStatus(
+        eventRecord.event_id,
+        newStatus,
+        eventRecord.retry_count,
       );
     } catch (error) {
       this.logger.error(
-        `Failed to process like event ${likeEvent.event_id} after all retries`,
+        `Failed to process post count event ${postCountEvent.event_id} after all retries`,
         error.stack,
       );
 
-      // Mark as failed in database
-      await this.markLikeEventAsFailed(likeEvent.event_id);
+      // Mark as failed
+      const newStatus = this.stateMachine.trigger(
+        eventRecord.status as EventStatus,
+        EventStatusEvent.SET_FAILED,
+        eventRecord,
+      );
+      await this.likeRepository.updatePostCountEventStatus(
+        eventRecord.event_id,
+        newStatus,
+        eventRecord.retry_count,
+      );
 
-      // Send to dead letter queue
       await this.kafkaService.sendToDeadLetterQueue(
-        { key: likeEvent.event_id, value: JSON.stringify(likeEvent) },
+        { key: postCountEvent.event_id, value: JSON.stringify(postCountEvent) },
         error as Error,
       );
     }
   }
 
-  private async processLikeEvent(likeEvent: LikeEventDto): Promise<void> {
-    const { event_id, post_id, user_id, action } = likeEvent;
+  private async processPostCountEvent(
+    postCountEvent: PostCountEventDto,
+    eventRecord: PostCountEvent,
+  ): Promise<void> {
+    const { event_id, post_id, delta } = postCountEvent;
 
-    // Check if this event was already processed (idempotency)
-    const existingLike = await this.likeRepository.findLikeByEventId(event_id);
-
-    if (existingLike && existingLike.status === LikeStatus.SUCCESS) {
+    // Skip if already successful
+    if (eventRecord.status === EventStatus.SUCCESS) {
       this.logger.log(
         `Event ${event_id} already processed successfully, skipping`,
       );
@@ -94,84 +138,35 @@ export class KafkaConsumerService implements OnModuleInit {
     }
 
     try {
-      if (action === 'LIKE') {
-        await this.processDatabaseLikeWrite(event_id, post_id, user_id);
-      } else if (action === 'UNLIKE') {
-        await this.processDatabaseUnlikeWrite(event_id, post_id, user_id);
-      }
-
-      this.logger.log(`Successfully processed ${action} event: ${event_id}`);
-    } catch (error) {
-      // Update retry count and status
-      if (existingLike) {
-        this.stateMachine.trigger(
-          existingLike.status,
-          LikeStatusEvent.SET_RETRYING,
-          existingLike,
+      // Mark as retrying if not first attempt
+      if (eventRecord.retry_count > 0) {
+        const newStatus = this.stateMachine.trigger(
+          eventRecord.status as EventStatus,
+          EventStatusEvent.SET_RETRYING,
+          eventRecord,
         );
-        await this.likeRepository.updateLike(existingLike);
-      }
-
-      throw error; // Re-throw to trigger retry mechanism
-    }
-  }
-
-  private async processDatabaseLikeWrite(
-    eventId: string,
-    postId: number,
-    userId: number,
-  ): Promise<void> {
-    // Ensure post exists
-    await this.likeRepository.ensurePostExists(postId);
-
-    // Try to create or update the like record
-    let like = await this.likeRepository.findLikeByEventId(eventId);
-
-    if (!like) {
-      // Create new like record
-      like = await this.likeRepository.createLike(postId, userId, eventId);
-    }
-
-    // Mark as successful
-    this.stateMachine.trigger(like.status, LikeStatusEvent.SET_SUCCESS, like);
-    await this.likeRepository.updateLike(like);
-
-    // Update post like count
-    const totalCount = await this.likeRepository.getLikeCount(postId);
-    await this.likeRepository.updatePostLikeCount(postId, totalCount);
-  }
-
-  private async processDatabaseUnlikeWrite(
-    eventId: string,
-    postId: number,
-    userId: number,
-  ): Promise<void> {
-    // Find and delete the like record
-    await this.likeRepository.deleteLike(postId, userId);
-
-    // Update post like count
-    const totalCount = await this.likeRepository.getLikeCount(postId);
-    await this.likeRepository.updatePostLikeCount(postId, totalCount);
-
-    this.logger.log(`Processed unlike for post ${postId}, user ${userId}`);
-  }
-
-  private async markLikeEventAsFailed(eventId: string): Promise<void> {
-    try {
-      const like = await this.likeRepository.findLikeByEventId(eventId);
-      if (like) {
-        this.stateMachine.trigger(
-          like.status,
-          LikeStatusEvent.SET_FAILED,
-          like,
+        await this.likeRepository.updatePostCountEventStatus(
+          event_id,
+          newStatus,
+          eventRecord.retry_count,
         );
-        await this.likeRepository.updateLike(like);
       }
+
+      // Ensure post exists
+      await this.likeRepository.ensurePostExists(post_id);
+
+      // Update post like count
+      await this.likeRepository.updatePostLikeCount(post_id, delta);
+
+      this.logger.log(
+        `Successfully processed post count event: ${event_id} (post: ${post_id}, delta: ${delta})`,
+      );
     } catch (error) {
       this.logger.error(
-        `Failed to mark event ${eventId} as failed`,
+        `Failed to process post count event: ${event_id}`,
         error.stack,
       );
+      throw error;
     }
   }
 }

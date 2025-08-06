@@ -1,6 +1,6 @@
 # Scalable Likes System – Social Media Event-Driven Architecture
 
-This project i did up replicates how social media platforms handles **millions of likes per second** with **eventual consistency**, **Kafka-based decoupling**, **Redis caching**, **idempotent writes**, and **resilient retries**.
+This project replicates how social media platforms handle **millions of likes per second** with **Redis caching with TTL**, **immediate like state tracking**, **Kafka-based post count updates**, **state machine-driven event processing**, and **idempotent writes with retries**.
 
 ---
 
@@ -11,8 +11,9 @@ This project i did up replicates how social media platforms handles **millions o
 | Frontend    | React + Tailwind CSS |
 | Backend     | NestJS + TypeORM     |
 | Database    | PostgreSQL           |
-| Cache Layer | Redis                |
+| Cache Layer | Redis (with TTL)     |
 | Messaging   | Kafka                |
+| State Mgmt  | Custom State Machine |
 
 ---
 
@@ -24,89 +25,118 @@ Client
 [React + Tailwind UI] ➔ POST /like
   ↓
 [NestJS API Gateway]
-  - Increments Redis like count
-  - Produces Kafka event
+  - Updates likes table immediately (user liked/unliked state)
+  - Produces Kafka event for post count update
   ↓
-[Kafka Topic: like-events]
+[Kafka Topic: post-count-events]
   ↓
-[NestJS Kafka Consumer Service]
+[NestJS Kafka Consumer Service + State Machine]
+  - Event created with PENDING status
   - Idempotency check
-  - Write to PostgreSQL with retries
+  - State transitions: PENDING → RETRYING → SUCCESS/FAILED
+  - Updates posts.like_count with retries
   - Exponential backoff on failure
   ↓
-[PostgreSQL]
-  - Durable storage
+[PostgreSQL posts table]
+  - Updated like count
+
+For Like Count Retrieval:
+Client ➔ GET /like/count/:id
   ↓
-[Background Sync Job]
-  - Periodically syncs DB counts back to Redis
+Redis Check (with TTL)
+  ↓ (if miss)
+PostgreSQL Query ➔ Update Redis with TTL
 ```
+
+---
+
+## State Machine Flow
+
+### Event Processing States
+
+```
+PENDING ──(retry)──> RETRYING ──(retry)──> RETRYING
+   │                     │                     │
+   │                     │                     │
+   └─(success)──> SUCCESS │                     │
+   │                     └─(success)──> SUCCESS │
+   └─(fail)────> FAILED   └─(fail)────> FAILED
+```
+
+### State Transitions
+
+| From State | Event        | To State | Action                |
+| ---------- | ------------ | -------- | --------------------- |
+| PENDING    | SET_RETRYING | RETRYING | Increment retry_count |
+| PENDING    | SET_SUCCESS  | SUCCESS  | Mark as processed     |
+| PENDING    | SET_FAILED   | FAILED   | Send to DLQ           |
+| RETRYING   | SET_RETRYING | RETRYING | Increment retry_count |
+| RETRYING   | SET_SUCCESS  | SUCCESS  | Mark as processed     |
+| RETRYING   | SET_FAILED   | FAILED   | Send to DLQ           |
 
 ---
 
 ## Core Concepts
 
-### Eventual Consistency
+### Immediate Like State + Async Count Updates
 
-- **Users see real-time like counts from Redis**.
-- **Writes to PostgreSQL happen asynchronously via Kafka**.
-- Redis and DB eventually converge using a background sync job.
+- **User like/unlike state is tracked immediately** in the `likes` table for instant UI feedback.
+- **Post like counts are updated asynchronously** via Kafka to maintain performance.
+- **Redis caches like counts with TTL** to reduce database load.
+
+---
+
+### State Machine-Driven Event Processing
+
+- Each Kafka event goes through a **state machine** that tracks processing status.
+- **PENDING**: Event received and queued for processing
+- **RETRYING**: Event failed and is being retried with exponential backoff
+- **SUCCESS**: Event processed successfully
+- **FAILED**: Event failed after all retries and sent to dead letter queue
+
+---
+
+### Redis TTL Strategy
+
+- Like counts are cached in Redis with a **configurable TTL (e.g., 5 minutes)**.
+- On cache miss, the system queries the database and refreshes the cache.
+- This ensures eventual consistency without requiring background sync jobs.
 
 ---
 
 ### Idempotency
 
-- Each like event contains a unique `event_id` (UUID).
-- DB table `likes` uses `event_id` as a unique constraint to **prevent duplicate writes**.
+- Each post count update event contains a unique `event_id` (UUID).
+- Events are processed exactly once using database constraints.
+- **State machine prevents duplicate processing** of the same event.
 
 ---
 
 ### Exponential Backoff (Kafka Consumer)
 
-On failure to write to PostgreSQL:
+On failure to update post counts:
 
+- State transitions from PENDING → RETRYING
 - Retry the same event with increasing delays:
   ```
-  1s → 2s → 4s → 8s (max retries: 5)
+  1s → 2s → 4s → 8s → 16s (max retries: 5)
   ```
-- If all retries fail, move the message to a **dead-letter topic** (`like-events-dlq`) for alerting or manual intervention.
+- State tracks retry_count and increments on each RETRYING transition
+- If all retries fail, state transitions to FAILED and message goes to DLQ
 
 ---
 
-## State Machine: Like Processing Lifecycle
-
-| State      | Description                      | Trigger                         |
-| ---------- | -------------------------------- | ------------------------------- |
-| `pending`  | Event produced to Kafka          | Redis increment + Kafka emit    |
-| `retrying` | Kafka consumer retrying DB write | PostgreSQL write failed         |
-| `success`  | Like persisted to PostgreSQL     | Kafka consumer write successful |
-| `failed`   | Max retries exceeded             | Event sent to dead-letter topic |
-
----
-
-## Redis Design
-
-Used as the **fast-access layer** to handle spikes in read/write traffic.
-
-### Redis Keys
-
-| Key                         | Type   | Purpose                   |
-| --------------------------- | ------ | ------------------------- |
-| `post:{post_id}:like_count` | String | Tracks current like count |
-
-> Redis is **not the source of truth**, but the **live cache** for speed.
-
----
-
-## PostgreSQL Schema
+## Database Schema
 
 ### Table: `likes`
 
 ```sql
 CREATE TABLE likes (
-  event_id UUID PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   post_id BIGINT NOT NULL,
   user_id BIGINT NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(post_id, user_id)
 );
 ```
 
@@ -119,44 +149,39 @@ CREATE TABLE posts (
 );
 ```
 
+### Table: `post_count_events` (with State Machine)
+
+```sql
+CREATE TABLE post_count_events (
+  event_id UUID PRIMARY KEY,
+  post_id BIGINT NOT NULL,
+  delta INTEGER NOT NULL, -- +1 for like, -1 for unlike
+  status VARCHAR(20) DEFAULT 'PENDING', -- PENDING, RETRYING, SUCCESS, FAILED
+  retry_count INTEGER DEFAULT 0,
+  processed_at TIMESTAMP DEFAULT NOW()
+);
+```
+
 ---
 
-## Background Job – DB to Redis Sync
+## Redis Design
 
-### When:
+### Redis Keys
 
-- Every few minutes (e.g., via CRON)
-- On Redis cold start
-
-### What it does:
-
-```ts
-// Pseudocode
-for each post_id in DB:
-  count = SELECT COUNT(*) FROM likes WHERE post_id = $id
-  redis.set(`post:${id}:like_count`, count)
-```
+| Key                         | Type   | TTL       | Purpose           |
+| --------------------------- | ------ | --------- | ----------------- |
+| `post:{post_id}:like_count` | String | 5 minutes | Cached like count |
 
 ---
 
 ## API Documentation
 
-This project includes **Swagger/OpenAPI** documentation for all API endpoints.
-
-### Access Swagger UI
-
-Once the backend is running, visit:
-
-```
-http://localhost:3001/api/docs
-```
-
 ### Available Endpoints
 
-| Method | Endpoint          | Description                             |
-| ------ | ----------------- | --------------------------------------- |
-| POST   | `/like`           | Toggle like/unlike for a post via kafka |
-| GET    | `/like/count/:id` | Get real-time like count from redis     |
+| Method | Endpoint          | Description                            |
+| ------ | ----------------- | -------------------------------------- |
+| POST   | `/like`           | Toggle like/unlike (immediate + async) |
+| GET    | `/like/count/:id` | Get like count (Redis → DB fallback)   |
 
 ### Example API Usage
 
@@ -179,23 +204,42 @@ curl http://localhost:3001/like/count/123
 
 ---
 
+## Kafka Events
+
+### Post Count Update Event
+
+```json
+{
+  "event_id": "uuid-v4",
+  "post_id": 123,
+  "delta": 1,
+  "timestamp": "2024-01-01T12:00:00Z"
+}
+```
+
+---
+
 ## Fault Tolerance
 
-- If Kafka fails: Redis still counts; DB sync will be delayed.
-- If DB fails: Kafka retries with exponential backoff.
-- If Redis fails: Warm it up from DB with background sync.
+- If Kafka fails: Like states are still updated; post counts will be eventually consistent when Kafka recovers.
+- If Redis fails: System falls back to database queries.
+- If Database fails: State machine tracks retries with exponential backoff and eventually moves to FAILED state.
+- **State machine ensures no event is lost** and provides full audit trail.
 
 ---
 
 ## Summary
 
-| Feature               | Supported                   |
-| --------------------- | --------------------------- |
-| Real-time likes       | via Redis                   |
-| Durable storage       | via PostgreSQL              |
-| High write throughput | via Kafka                   |
-| Retry on failure      | with backoff                |
-| Idempotent writes     | via `event_id`              |
-| UI responsiveness     | sub-millisecond Redis reads |
+| Feature               | Implementation                       |
+| --------------------- | ------------------------------------ |
+| Instant like feedback | Direct `likes` table updates         |
+| Cached like counts    | Redis with TTL                       |
+| Async count updates   | Kafka + consumer with state machine  |
+| Event state tracking  | PENDING → RETRYING → SUCCESS/FAILED  |
+| Cache invalidation    | TTL-based (no manual sync)           |
+| Retry on failure      | State machine + exponential backoff  |
+| Idempotent writes     | Event deduplication + state tracking |
+| UI responsiveness     | Sub-millisecond Redis reads          |
+| Audit trail           | Complete event lifecycle in database |
 
 ---

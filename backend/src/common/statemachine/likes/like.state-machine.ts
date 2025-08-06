@@ -1,45 +1,48 @@
 import { Transition } from '../Istatemachine';
-import { LikeStatusEvent } from './like.state-machine.events';
-import { Like } from '../../entities/like.entity';
-import { LikeStateHandlers } from './like.state-machine.handlers';
-import { LikeStatus } from 'src/common/enums/like-status.enum';
+import { PostCountEvent } from '../../entities/post-count-event.entity';
+import { EventStateHandlers } from './like.state-machine.handlers';
+import { EventStatus } from 'src/common/enums/like-status.enum';
+import { EventStatusEvent } from './like.state-machine.events';
 
-export const likeTransitions: Transition<LikeStatus, LikeStatusEvent, Like>[] =
-  [
-    {
-      fromState: LikeStatus.PENDING,
-      toState: LikeStatus.RETRYING,
-      stateMachineEvent: LikeStatusEvent.SET_RETRYING,
-      handlers: [LikeStateHandlers.setStatusHandler],
-    },
-    {
-      fromState: LikeStatus.PENDING,
-      toState: LikeStatus.SUCCESS,
-      stateMachineEvent: LikeStatusEvent.SET_SUCCESS,
-      handlers: [LikeStateHandlers.setStatusHandler],
-    },
-    {
-      fromState: LikeStatus.PENDING,
-      toState: LikeStatus.FAILED,
-      stateMachineEvent: LikeStatusEvent.SET_FAILED,
-      handlers: [LikeStateHandlers.setStatusHandler],
-    },
-    {
-      fromState: LikeStatus.RETRYING,
-      toState: LikeStatus.SUCCESS,
-      stateMachineEvent: LikeStatusEvent.SET_SUCCESS,
-      handlers: [LikeStateHandlers.setStatusHandler],
-    },
-    {
-      fromState: LikeStatus.RETRYING,
-      toState: LikeStatus.FAILED,
-      stateMachineEvent: LikeStatusEvent.SET_FAILED,
-      handlers: [LikeStateHandlers.setStatusHandler],
-    },
-    {
-      fromState: LikeStatus.RETRYING,
-      toState: LikeStatus.RETRYING,
-      stateMachineEvent: LikeStatusEvent.SET_RETRYING,
-      handlers: [LikeStateHandlers.setStatusHandler],
-    },
-  ];
+export const eventTransitions: Transition<
+  EventStatus,
+  EventStatusEvent,
+  PostCountEvent
+>[] = [
+  {
+    fromState: EventStatus.PENDING,
+    toState: EventStatus.RETRYING,
+    stateMachineEvent: EventStatusEvent.SET_RETRYING,
+    handlers: [EventStateHandlers.setStatusHandler],
+  },
+  {
+    fromState: EventStatus.PENDING,
+    toState: EventStatus.SUCCESS,
+    stateMachineEvent: EventStatusEvent.SET_SUCCESS,
+    handlers: [EventStateHandlers.setStatusHandler],
+  },
+  {
+    fromState: EventStatus.PENDING,
+    toState: EventStatus.FAILED,
+    stateMachineEvent: EventStatusEvent.SET_FAILED,
+    handlers: [EventStateHandlers.setStatusHandler],
+  },
+  {
+    fromState: EventStatus.RETRYING,
+    toState: EventStatus.SUCCESS,
+    stateMachineEvent: EventStatusEvent.SET_SUCCESS,
+    handlers: [EventStateHandlers.setStatusHandler],
+  },
+  {
+    fromState: EventStatus.RETRYING,
+    toState: EventStatus.FAILED,
+    stateMachineEvent: EventStatusEvent.SET_FAILED,
+    handlers: [EventStateHandlers.setStatusHandler],
+  },
+  {
+    fromState: EventStatus.RETRYING,
+    toState: EventStatus.RETRYING,
+    stateMachineEvent: EventStatusEvent.SET_RETRYING,
+    handlers: [EventStateHandlers.setStatusHandler],
+  },
+];
