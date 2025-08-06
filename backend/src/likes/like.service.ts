@@ -144,6 +144,24 @@ export class LikeService {
     }
   }
 
+  async getLikeCountWithUserStatus(
+    postId: number,
+    userId?: number,
+  ): Promise<LikeCountResponseDto> {
+    const result = await this.getLikeCount(postId);
+
+    if (userId) {
+      const isLiked = await this.getUserLikeStatus(postId, userId);
+      return {
+        ...result,
+        isLiked,
+        user_id: userId,
+      };
+    }
+
+    return result;
+  }
+
   async getUserLikeStatus(postId: number, userId: number): Promise<boolean> {
     try {
       const like = await this.likeRepository.findLikeByPostAndUser(

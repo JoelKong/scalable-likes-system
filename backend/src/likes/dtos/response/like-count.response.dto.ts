@@ -12,4 +12,18 @@ export class LikeCountResponseDto {
     example: 123,
   })
   post_id: number;
+
+  @ApiProperty({
+    description: 'Whether the current user has liked this post',
+    example: true,
+    required: false,
+  })
+  isLiked?: boolean;
+
+  @ApiProperty({
+    description: 'User identifier (if provided)',
+    example: 1,
+    required: false,
+  })
+  user_id?: number;
 }

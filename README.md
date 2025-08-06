@@ -17,6 +17,12 @@ This project replicates how social media platforms handle **millions of likes pe
 
 ---
 
+## How to run
+
+Create env file based off .env.example, update docker-compose.yml with database password, run docker-compose up
+
+---
+
 ## Architectural Overview
 
 ```

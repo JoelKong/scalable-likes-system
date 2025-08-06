@@ -8,6 +8,7 @@ interface Post {
 }
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const CURRENT_USER_ID = 1; // In a real app, this would come from authentication
 
 export default function App() {
   const [post, setPost] = useState<Post>({
@@ -18,21 +19,31 @@ export default function App() {
   });
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
 
-  // Fetch initial like count on component mount
+  // Fetch initial like count and user status on component mount
   useEffect(() => {
-    fetchLikeCount();
+    fetchLikeCountAndStatus();
   }, []);
 
-  const fetchLikeCount = async () => {
+  const fetchLikeCountAndStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/like/count/${post.id}`);
+      setIsInitialLoading(true);
+      const response = await fetch(
+        `${API_URL}/like/count/${post.id}?userId=${CURRENT_USER_ID}`
+      );
       if (response.ok) {
         const data = await response.json();
-        setPost((prev) => ({ ...prev, likeCount: data.count }));
+        setPost((prev) => ({
+          ...prev,
+          likeCount: data.count,
+          isLiked: data.isLiked || false,
+        }));
       }
     } catch (error) {
-      console.error("Failed to fetch like count:", error);
+      console.error("Failed to fetch like count and status:", error);
+    } finally {
+      setIsInitialLoading(false);
     }
   };
 
@@ -44,6 +55,7 @@ export default function App() {
     // Store previous state for rollback
     const previousState = { ...post };
 
+    // Optimistic update
     setPost((prev) => ({
       ...prev,
       likeCount: prev.isLiked ? prev.likeCount - 1 : prev.likeCount + 1,
@@ -58,7 +70,7 @@ export default function App() {
         },
         body: JSON.stringify({
           post_id: post.id,
-          user_id: 1, // Assuming everyone is user ID 1 for test
+          user_id: CURRENT_USER_ID,
         }),
       });
 
@@ -70,13 +82,16 @@ export default function App() {
 
       const result = await response.json();
 
-      // Update with the actual count from Redis
-      if (result.likeCount !== undefined) {
-        setPost((prev) => ({
-          ...prev,
-          likeCount: result.likeCount,
-        }));
-      }
+      // Update with the actual state from the response
+      setPost((prev) => ({
+        ...prev,
+        isLiked: result.isLiked,
+      }));
+
+      // Refetch the count to ensure consistency
+      setTimeout(() => {
+        fetchLikeCountAndStatus();
+      }, 500); // Small delay to allow Kafka processing
     } catch (error) {
       console.error("Error liking post:", error);
       // Revert to previous state on error
@@ -85,6 +100,22 @@ export default function App() {
       setIsLoading(false);
     }
   };
+
+  if (isInitialLoading) {
+    return (
+      <div className="min-h-screen bg-gray-100 py-8">
+        <div className="max-w-md mx-auto">
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="animate-pulse">
+              <div className="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
+              <div className="h-4 bg-gray-200 rounded w-1/2 mb-4"></div>
+              <div className="h-10 bg-gray-200 rounded w-full"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-100 py-8">
@@ -103,31 +134,51 @@ export default function App() {
             <button
               onClick={handleLike}
               disabled={isLoading}
-              className={`flex items-center space-x-2 px-4 py-2 rounded-full transition-all duration-200 ${
+              className={`flex items-center space-x-2 px-4 py-2 rounded-full transition-all duration-200 transform hover:scale-105 ${
                 post.isLiked
-                  ? "bg-red-500 text-white hover:bg-red-600"
+                  ? "bg-red-500 text-white hover:bg-red-600 shadow-lg"
                   : "bg-gray-200 text-gray-700 hover:bg-gray-300"
               } ${
-                isLoading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                isLoading
+                  ? "opacity-50 cursor-not-allowed scale-100"
+                  : "cursor-pointer"
               }`}
             >
               <svg
-                className={`w-5 h-5 ${
-                  post.isLiked ? "fill-current" : "stroke-current fill-none"
-                }`}
+                className={`w-5 h-5 transition-all duration-200 ${
+                  post.isLiked
+                    ? "fill-current text-white transform scale-110"
+                    : "stroke-current fill-none"
+                } ${isLoading ? "animate-pulse" : ""}`}
                 viewBox="0 0 24 24"
                 strokeWidth="2"
               >
                 <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
               </svg>
-              <span>{post.isLiked ? "Unlike" : "Like"}</span>
+              <span className="font-medium">
+                {isLoading ? "..." : post.isLiked ? "Unlike" : "Like"}
+              </span>
             </button>
+          </div>
+
+          {/* Status indicator */}
+          <div className="mt-3 text-xs text-center">
+            <span
+              className={`inline-block w-2 h-2 rounded-full mr-1 ${
+                post.isLiked ? "bg-red-500" : "bg-gray-400"
+              }`}
+            ></span>
+            <span className="text-gray-500">
+              {post.isLiked ? "You liked this post" : "Not liked"}
+            </span>
           </div>
         </div>
 
         <div className="mt-4 text-center text-sm text-gray-500">
           <p>Real-time likes powered by Redis & Kafka</p>
-          <p className="mt-1">Post ID: {post.id} | User ID: 1</p>
+          <p className="mt-1">
+            Post ID: {post.id} | User ID: {CURRENT_USER_ID}
+          </p>
           <p className="mt-1">API: {API_URL}</p>
         </div>
       </div>
