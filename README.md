@@ -1,6 +1,6 @@
 # Scalable Likes System – Social Media Event-Driven Architecture
 
-This project replicates how social media platforms handle **millions of likes per second** with **Redis caching with TTL**, **immediate like state tracking**, **Kafka-based post count updates**, **state machine-driven event processing**, and **idempotent writes with retries**.
+This project replicates how social media platforms handle **millions of likes per second** with **Redis caching with TTL**, **immediate like state tracking**, **Kafka-based post count updates**, **state machine-driven event processing**, **eventual consistency** and **idempotent writes with retries**.
 
 ---
 
